@@ -1,0 +1,33 @@
+{
+  "name": "marios-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "data": "node scripts/build-climatology.mjs",
+    "wiki": "node scripts/fetch-wiki.mjs"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "d3-contour": "^4.0.2",
+    "d3-interpolate": "^3.0.1",
+    "leaflet": "^1.9.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-icons": "^5.7.0",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "fflate": "^0.8.3",
+    "geotiff": "^3.0.5",
+    "oxlint": "^1.81.0",
+    "vite": "^8.3.0"
+  }
+}

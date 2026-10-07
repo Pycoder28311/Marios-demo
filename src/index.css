@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Linux Libertine", "Georgia", "Times New Roman", serif;
+}
+
+/* Theme colours: set by data-theme="dark" | "light" on <html>. */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent-ink: var(--accent-ink);
+  --color-warn: var(--warn);
+  --color-link: var(--link);
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #020617;
+  --raised: #1e293b;
+  --ink: #ffffff;
+  --ink-2: #e2e8f0;
+  --ink-3: #cbd5e1;
+  --muted: #94a3b8;
+  --faint: #64748b;
+  --accent-ink: #7dd3fc;
+  --warn: #fde68a;
+  --link: #88a3e8;
+  --tint-text: 100%; /* how much of a phase colour is used for text */
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface: #ffffff;
+  --raised: #e2e8f0;
+  --ink: #0f172a;
+  --ink-2: #1e293b;
+  --ink-3: #334155;
+  --muted: #64748b;
+  --faint: #94a3b8;
+  --accent-ink: #0369a1;
+  --warn: #92400e;
+  --link: #3366cc;
+  --tint-text: 60%;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+}
+
+.leaflet-container {
+  font-family: inherit;
+}
+
+/* Value labels sitting on the isohyet lines */
+.isohyet-label span {
+  display: inline-block;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow:
+    0 0 2px #000,
+    0 0 3px #000,
+    0 0 4px #000;
+  pointer-events: none;
+}
+
+/* Photo in the info panel slides up from below whenever a phase is opened */
+@keyframes slide-up-in {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.animate-slide-up-in {
+  animation: slide-up-in 450ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Phones: keep the map's bottom edge uncluttered */
+@media (max-width: 639px) {
+  .leaflet-control-scale {
+    display: none;
+  }
+  .leaflet-control-attribution {
+    font-size: 8px;
+    line-height: 1.4;
+  }
+}
+
+/* Hide hairline seams between imagery tiles at fractional zoom levels */
+.leaflet-tile-container img.leaflet-tile {
+  mix-blend-mode: plus-lighter;
+}
