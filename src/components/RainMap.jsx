@@ -2,10 +2,12 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createSatelliteLayer } from '../lib/basemap'
-import { isolines, nearestCell, renderField, sample } from '../lib/field'
+import { createFieldRenderer, isolines, nearestCell, sample } from '../lib/field'
 
 // `values` should already be gap-filled; `mask` marks the cells that are land.
-export default function RainMap({ values, mask, grid, domain, feature, contourStep, showContours, opacity, onHover, onProvider, onMap }) {
+// `values` may change every animation frame (blended months); `contourValues` is updated
+// less often because isolines are much more expensive to rebuild.
+export default function RainMap({ values, contourValues = values, mask, grid, domain, feature, contourStep, showContours, opacity, onHover, onProvider, onMap }) {
   const el = useRef(null)
   const map = useRef(null)
   const layers = useRef({})
@@ -71,29 +73,31 @@ export default function RainMap({ values, mask, grid, domain, feature, contourSt
   }, [ready, feature])
 
   // --- rainfall raster -------------------------------------------------------
-  const imageUrl = useMemo(
-    () => renderField({ values, grid, domain, feature, clip: true }).toDataURL(),
-    [values, grid, domain, feature],
-  )
+  // One canvas, positioned by Leaflet (svgOverlay accepts any element) and repainted in
+  // place, so animation frames don't need image encoding or new DOM.
   useEffect(() => {
     if (!ready) return
-    const bounds = [
-      [grid.south, grid.west],
-      [grid.north, grid.east],
-    ]
-    if (!layers.current.image) {
-      layers.current.image = L.imageOverlay(imageUrl, bounds, { pane: 'rain', opacity, interactive: false }).addTo(map.current)
-    } else {
-      layers.current.image.setUrl(imageUrl)
-      layers.current.image.setBounds(L.latLngBounds(bounds))
+    if (!layers.current.field) {
+      const renderer = createFieldRenderer({ grid, template: values, feature })
+      const bounds = [
+        [grid.south, grid.west],
+        [grid.north, grid.east],
+      ]
+      const layer = L.svgOverlay(renderer.canvas, bounds, { pane: 'rain', opacity, interactive: false }).addTo(map.current)
+      layers.current.field = { renderer, layer }
     }
-  }, [ready, imageUrl, grid, opacity])
+    layers.current.field.renderer.render(values, domain)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, values, domain])
   useEffect(() => {
-    layers.current.image?.setOpacity(opacity)
+    layers.current.field?.layer.setOpacity(opacity)
   }, [opacity])
 
   // --- isohyets --------------------------------------------------------------
-  const lines = useMemo(() => (showContours ? isolines(values, grid, contourStep, mask) : []), [values, mask, grid, contourStep, showContours])
+  const lines = useMemo(
+    () => (showContours ? isolines(contourValues, grid, contourStep, mask) : []),
+    [contourValues, mask, grid, contourStep, showContours],
+  )
   useEffect(() => {
     if (!ready) return
     const group = L.layerGroup().addTo(map.current)

@@ -107,53 +107,129 @@ export function stats(values, mask) {
 }
 
 // ---------------------------------------------------------------------------
-// Render the field into a canvas laid out in Web Mercator, optionally clipped to land.
-export function renderField({ values, grid, domain, feature, clip, width = 1100 }) {
+// Intermediate frames: a month's value sits in the middle of its stretch of the year
+// (position m + 0.5); in between, the two neighbouring months are blended linearly.
+export function blendMonths(months, pos) {
+  const n = months.length
+  const x = pos - 0.5
+  const a = ((Math.floor(x) % n) + n) % n
+  const b = (a + 1) % n
+  const t = x - Math.floor(x)
+  if (t < 1e-4) return months[a]
+  if (t > 1 - 1e-4) return months[b]
+  const A = months[a]
+  const B = months[b]
+  return A.map((row, r) => row.map((v, c) => (v == null || B[r][c] == null ? null : v + (B[r][c] - v) * t)))
+}
+
+// Same blend for per-month statistics ({ min, max, mean }).
+export function blendStats(monthStats, pos) {
+  const n = monthStats.length
+  const x = pos - 0.5
+  const a = ((Math.floor(x) % n) + n) % n
+  const b = (a + 1) % n
+  const t = x - Math.floor(x)
+  const mix = (k) => monthStats[a][k] + (monthStats[b][k] - monthStats[a][k]) * t
+  return { min: mix('min'), max: mix('max'), mean: mix('mean') }
+}
+
+// ---------------------------------------------------------------------------
+// Fast field renderer for animation. Everything that does not depend on the values is
+// precomputed once: which land pixels are drawn (clipped to the country, anti-aliased),
+// and for each pixel the grid cells and bilinear weights it reads. A frame is then one
+// pass over the land pixels. The canvas is laid out in Web Mercator so it lines up.
+//   template – any month's (gap-filled) values; only its null pattern is used
+export function createFieldRenderer({ grid, template, feature, width = 1100 }) {
   const yTop = toMercY(grid.north)
   const yBottom = toMercY(grid.south)
   const lonSpan = grid.east - grid.west
-  const radSpan = (lonSpan * Math.PI) / 180
-  const height = Math.round((width * (yTop - yBottom)) / radSpan)
+  const height = Math.round((width * (yTop - yBottom)) / ((lonSpan * Math.PI) / 180))
 
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
   const ctx = canvas.getContext('2d')
-  const img = ctx.createImageData(width, height)
-  const [lo, hi] = domain
-  const span = hi - lo || 1
 
+  // Land coverage (alpha) from the country outline.
+  const maskCanvas = document.createElement('canvas')
+  maskCanvas.width = width
+  maskCanvas.height = height
+  const mctx = maskCanvas.getContext('2d', { willReadFrequently: true })
+  const px = (lon) => ((lon - grid.west) / lonSpan) * width
+  const py = (lat) => ((yTop - toMercY(lat)) / (yTop - yBottom)) * height
+  mctx.beginPath()
+  for (const poly of feature.geometry.coordinates)
+    for (const ring of poly) {
+      ring.forEach(([lon, lat], i) => (i ? mctx.lineTo(px(lon), py(lat)) : mctx.moveTo(px(lon), py(lat))))
+      mctx.closePath()
+    }
+  mctx.fillStyle = '#fff'
+  mctx.fill('evenodd')
+  const coverage = mctx.getImageData(0, 0, width, height).data
+
+  // Per land pixel: up to 4 cell indices + normalised bilinear weights (nulls skipped).
+  const pix = []
+  const idx = []
+  const wts = []
+  const alpha = []
+  const has = (r, c) => template[r]?.[c] != null
   for (let y = 0; y < height; y++) {
     const lat = fromMercY(yTop - ((y + 0.5) / height) * (yTop - yBottom))
+    const fr = (grid.north - lat) / grid.step
+    if (fr < 0 || fr > grid.rows - 1) continue
+    const r0 = Math.min(Math.floor(fr), grid.rows - 2)
+    const dr = fr - r0
     for (let x = 0; x < width; x++) {
-      const lon = grid.west + ((x + 0.5) / width) * lonSpan
-      const v = sample(values, grid, lat, lon)
-      if (v == null) continue
-      const t = Math.min(1, Math.max(0, (v - lo) / span))
-      const li = Math.round(t * (LUT_SIZE - 1)) * 3
-      const i = (y * width + x) * 4
-      img.data[i] = LUT[li]
-      img.data[i + 1] = LUT[li + 1]
-      img.data[i + 2] = LUT[li + 2]
-      img.data[i + 3] = 255
+      const a = coverage[(y * width + x) * 4 + 3]
+      if (!a) continue
+      const fc = (((x + 0.5) / width) * lonSpan) / grid.step
+      if (fc < 0 || fc > grid.cols - 1) continue
+      const c0 = Math.min(Math.floor(fc), grid.cols - 2)
+      const dc = fc - c0
+      const cand = [
+        [r0, c0, (1 - dr) * (1 - dc)],
+        [r0, c0 + 1, (1 - dr) * dc],
+        [r0 + 1, c0, dr * (1 - dc)],
+        [r0 + 1, c0 + 1, dr * dc],
+      ].filter(([r, c, w]) => w > 0 && has(r, c))
+      const sum = cand.reduce((s, k) => s + k[2], 0)
+      if (!sum) continue
+      pix.push((y * width + x) * 4)
+      alpha.push(a)
+      for (let k = 0; k < 4; k++) {
+        idx.push(cand[k] ? cand[k][0] * grid.cols + cand[k][1] : 0)
+        wts.push(cand[k] ? cand[k][2] / sum : 0)
+      }
     }
   }
-  ctx.putImageData(img, 0, 0)
+  const P = Int32Array.from(pix)
+  const I = Int32Array.from(idx)
+  const Wt = Float32Array.from(wts)
+  const Al = Uint8Array.from(alpha)
+  const img = ctx.createImageData(width, height)
+  const flat = new Float32Array(grid.rows * grid.cols)
 
-  if (clip && feature) {
-    const px = (lon) => ((lon - grid.west) / lonSpan) * width
-    const py = (lat) => ((yTop - toMercY(lat)) / (yTop - yBottom)) * height
-    ctx.globalCompositeOperation = 'destination-in'
-    ctx.beginPath()
-    for (const poly of feature.geometry.coordinates)
-      for (const ring of poly) {
-        ring.forEach(([lon, lat], i) => (i ? ctx.lineTo(px(lon), py(lat)) : ctx.moveTo(px(lon), py(lat))))
-        ctx.closePath()
-      }
-    ctx.fill('evenodd')
-    ctx.globalCompositeOperation = 'source-over'
+  function render(values, domain) {
+    for (let r = 0; r < grid.rows; r++) {
+      const row = values[r]
+      for (let c = 0; c < grid.cols; c++) flat[r * grid.cols + c] = row[c] ?? 0
+    }
+    const [lo, hi] = domain
+    const scale = (LUT_SIZE - 1) / (hi - lo || 1)
+    const d = img.data
+    for (let n = 0, k = 0; n < P.length; n++, k += 4) {
+      const v = flat[I[k]] * Wt[k] + flat[I[k + 1]] * Wt[k + 1] + flat[I[k + 2]] * Wt[k + 2] + flat[I[k + 3]] * Wt[k + 3]
+      const li = Math.max(0, Math.min(LUT_SIZE - 1, Math.round((v - lo) * scale))) * 3
+      const o = P[n]
+      d[o] = LUT[li]
+      d[o + 1] = LUT[li + 1]
+      d[o + 2] = LUT[li + 2]
+      d[o + 3] = Al[n]
+    }
+    ctx.putImageData(img, 0, 0)
   }
-  return canvas
+
+  return { canvas, render }
 }
 
 // ---------------------------------------------------------------------------

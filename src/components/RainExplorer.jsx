@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { LuCloudRain, LuSlidersHorizontal, LuX } from 'react-icons/lu'
 import greece from '../data/greece.geo.json'
 import data from '../data/rainfall-greece-average.json'
-import { fillGaps, landMask, niceStep, stats } from '../lib/field'
+import { blendMonths, blendStats, fillGaps, landMask, niceStep, stats } from '../lib/field'
 import { useIsMobile, useIsNarrow } from '../lib/useMediaQuery'
 import CropPhases from './CropPhases'
 import InfoPanel from './InfoPanel'
@@ -13,6 +13,8 @@ import Timeline from './Timeline'
 
 const { grid } = data
 const MONTH_MS = 3200 // playback speed: time per month
+const FIELD_STEPS = 64 // raster frames per month when blending
+const CONTOUR_STEPS = 16 // isoline updates per month when blending
 const nf = (v, digits = 1) => v.toLocaleString('el-GR', { maximumFractionDigits: digits, minimumFractionDigits: digits })
 
 // Rainfall map + crop calendar: map with crop-phase cards, timeline and info sidebar.
@@ -24,6 +26,7 @@ export default function RainExplorer({ onClose, theme, onToggleTheme }) {
   const [hover, setHover] = useState(null)
   const [scale, setScale] = useState('month')
   const [showContours, setShowContours] = useState(true)
+  const [smooth, setSmooth] = useState(true) // blend between months
   const [opacity, setOpacity] = useState(0.8)
   const [basemap, setBasemap] = useState(null)
   const [map, setMap] = useState(null)
@@ -33,16 +36,26 @@ export default function RainExplorer({ onClose, theme, onToggleTheme }) {
 
   const monthCount = data.months.length
   const month = Math.floor(progress) % monthCount
-  const raw = data.months[month].values
-  const mask = useMemo(() => landMask(raw), [raw])
-  const values = useMemo(() => fillGaps(raw), [raw])
 
+  // Precomputed once: gap-filled grids to blend between, and the land mask (same for every month).
+  const filled = useMemo(() => data.months.map((m) => fillGaps(m.values)), [])
+  const mask = useMemo(() => landMask(data.months[0].values), [])
   const monthStats = useMemo(() => data.months.map((m) => stats(m.values)), [])
   const means = useMemo(() => monthStats.map((s) => s.mean), [monthStats])
+
+  // Intermediate frames: with smooth transitions the map blends the two neighbouring months
+  // by the timeline position; otherwise it shows whole months. Positions are quantised so
+  // the raster updates FIELD_STEPS times per month and the (costlier) isolines CONTOUR_STEPS.
+  const pos = smooth ? progress : month + 0.5
+  const fieldPos = Math.round(pos * FIELD_STEPS) / FIELD_STEPS
+  const contourPos = Math.round(pos * CONTOUR_STEPS) / CONTOUR_STEPS
+  const values = useMemo(() => blendMonths(filled, fieldPos), [filled, fieldPos])
+  const contourValues = useMemo(() => blendMonths(filled, contourPos), [filled, contourPos])
+  const current = useMemo(() => blendStats(monthStats, fieldPos), [monthStats, fieldPos])
   const domain = useMemo(() => {
-    if (scale === 'month') return [monthStats[month].min, monthStats[month].max]
+    if (scale === 'month') return [current.min, current.max]
     return [Math.min(...monthStats.map((s) => s.min)), Math.max(...monthStats.map((s) => s.max))]
-  }, [scale, monthStats, month])
+  }, [scale, current, monthStats])
   const contourStep = niceStep(domain[1] - domain[0])
 
   // Playback: the position moves continuously along the year.
@@ -146,6 +159,10 @@ export default function RainExplorer({ onClose, theme, onToggleTheme }) {
             <input type="checkbox" checked={showContours} onChange={(e) => setShowContours(e.target.checked)} className="accent-sky-400" />
             Ισοϋέτιες
           </label>
+          <label className="flex cursor-pointer select-none items-center gap-2" title="Ενδιάμεσα καρέ ανάμεσα στους μήνες">
+            <input type="checkbox" checked={smooth} onChange={(e) => setSmooth(e.target.checked)} className="accent-sky-400" />
+            Ομαλή μετάβαση
+          </label>
           <label className="flex items-center gap-2">
             Αδιαφάνεια
             <input type="range" min="0.1" max="1" step="0.05" value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} className="w-20 accent-sky-400" />
@@ -174,6 +191,7 @@ export default function RainExplorer({ onClose, theme, onToggleTheme }) {
           <div className="relative min-h-0 flex-1">
             <RainMap
               values={values}
+              contourValues={contourValues}
               mask={mask}
               grid={grid}
               domain={domain}
@@ -209,7 +227,7 @@ export default function RainExplorer({ onClose, theme, onToggleTheme }) {
             )}
 
             <div data-obstacle className="absolute bottom-7 right-2 z-[1000] sm:bottom-8 sm:right-3">
-              <Legend domain={domain} units={data.units} month={data.months[month].name} mean={monthStats[month].mean} compact={isMobile} />
+              <Legend domain={domain} units={data.units} month={data.months[month].name} mean={current.mean} compact={isMobile} />
             </div>
 
             {hover && hover.value != null && (
